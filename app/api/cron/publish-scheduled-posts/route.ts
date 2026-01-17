@@ -3,67 +3,102 @@ import db from "@/lib/db";
 import { publishScheduledPost } from "@/lib/twitter/publish-tweet";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 300; // 5 minutes max execution
+export const maxDuration = 300;
 
 export async function GET(req: Request) {
   try {
-    // Verify the request is from Vercel Cron
-    const authHeader = req.headers.get("authorization");
-    if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    /**
+     * ✅ cron-job.org SAFE AUTH
+     * Use query param instead of headers
+     */
+    console.log("🔐 CRON_SECRET ENV:", process.env.CRON_SECRET);
+
+    const { searchParams } = new URL(req.url);
+    const secret = searchParams.get("secret");
+
+    if (secret !== process.env.CRON_SECRET) {
+      console.error("❌ Unauthorized cron request");
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const now = new Date();
+    console.log("🕐 Cron started at:", now.toISOString());
 
-    // Get all posts that should be published (scheduledTime <= now and status = SCHEDULED)
     const duePosts = await db.scheduledPost.findMany({
       where: {
+        status: "SCHEDULED",
         scheduledTime: {
           lte: now,
         },
-        status: "SCHEDULED",
       },
       include: {
         twitterAccount: true,
       },
-      take: 50, // Process max 50 posts per run
       orderBy: {
         scheduledTime: "asc",
       },
+      take: 50,
     });
+
+    console.log(`📋 Due posts found: ${duePosts.length}`);
 
     if (duePosts.length === 0) {
       return NextResponse.json({
         success: true,
-        message: "No posts to publish",
+        message: "No posts due",
         processed: 0,
+        timestamp: now.toISOString(),
       });
     }
 
-    console.log(`📋 Found ${duePosts.length} posts to publish`);
-
     const results = {
-      success: 0,
+      published: 0,
       failed: 0,
+      errors: [] as string[],
     };
 
     for (const post of duePosts) {
       try {
-        console.log(`📤 Publishing post ${post.id}...`);
+        console.log(`📤 Publishing post ${post.id}`);
+        console.log(`   Scheduled UTC: ${post.scheduledTime.toISOString()}`);
+        console.log(`   Account: @${post.twitterAccount.username}`);
+
+        /**
+         * 🚀 Publish to Twitter
+         */
         await publishScheduledPost(post);
-        results.success++;
-        console.log(`✅ Post ${post.id} published successfully`);
-      } catch (error) {
-        console.error(`❌ Error publishing post ${post.id}:`, error);
-        results.failed++;
-        
-    
+
+        /**
+         * ✅ THIS WAS THE MISSING PIECE
+         */
         await db.scheduledPost.update({
           where: { id: post.id },
-          data: { status: "FAILED" },
+          data: {
+            status: "PUBLISHED",
+          },
+        });
+
+        results.published++;
+        console.log(`✅ Post ${post.id} marked as PUBLISHED`);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Unknown error";
+
+        console.error(`❌ Failed post ${post.id}:`, message);
+
+        results.failed++;
+        results.errors.push(`Post ${post.id}: ${message}`);
+
+        await db.scheduledPost.update({
+          where: { id: post.id },
+          data: {
+            status: "FAILED",
+          },
         });
       }
     }
+
+    console.log("📊 Cron results:", results);
 
     return NextResponse.json({
       success: true,
@@ -72,9 +107,12 @@ export async function GET(req: Request) {
       timestamp: now.toISOString(),
     });
   } catch (error) {
-    console.error("Cron job error:", error);
+    console.error("❌ Cron crashed:", error);
     return NextResponse.json(
-      { error: "Internal server error" },
+      {
+        error: "internal_server_error",
+        message: error instanceof Error ? error.message : "Unknown error",
+      },
       { status: 500 }
     );
   }

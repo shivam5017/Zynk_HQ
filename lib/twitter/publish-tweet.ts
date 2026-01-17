@@ -12,32 +12,72 @@ interface ScheduledPostWithAccount {
     id: string;
     accessToken: string;
     refreshToken: string | null;
-    expiresAt: Date | null; // Changed from Date to Date | null
+    expiresAt: Date | null;
   };
 }
 
-// Upload media
+/* ----------------------------------------
+   TOKEN HANDLING (CRITICAL FIX)
+---------------------------------------- */
+
+async function getValidAccessToken(account: ScheduledPostWithAccount["twitterAccount"]) {
+  // Token still valid → use it
+  if (account.expiresAt && account.expiresAt > new Date()) {
+    return account.accessToken;
+  }
+
+  console.log(`[${account.id}] Access token expired, refreshing...`);
+
+  if (!account.refreshToken) {
+    throw new Error("Missing refresh token");
+  }
+
+  const token = await refreshTwitterToken(account.refreshToken);
+
+  await db.twitterAccount.update({
+    where: { id: account.id },
+    data: {
+      accessToken: token.access_token,
+      refreshToken: token.refresh_token, // 🔥 MUST SAVE
+      expiresAt: new Date(Date.now() + token.expires_in * 1000),
+    },
+  });
+
+  console.log(`[${account.id}] Token refreshed and saved`);
+
+  return token.access_token;
+}
+
+/* ----------------------------------------
+   MEDIA UPLOAD
+---------------------------------------- */
+
 async function uploadMedia(accessToken: string, base64: string) {
   const form = new FormData();
   form.append("media_data", base64);
 
   const res = await fetch(MEDIA_URL, {
     method: "POST",
-    headers: { Authorization: `Bearer ${accessToken}` },
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
     body: form,
   });
 
+  const json = await res.json().catch(() => ({}));
+
   if (!res.ok) {
-    const json = await res.json().catch(() => ({}));
     console.error("Media upload failed →", json);
     throw new Error("twitter_media_upload_failed");
   }
 
-  const json = await res.json();
-  return json.media_id_string;
+  return json.media_id_string as string;
 }
 
-// Publish tweet
+/* ----------------------------------------
+   TWEET PUBLISH
+---------------------------------------- */
+
 async function publishTweet(
   accessToken: string,
   caption: string,
@@ -59,64 +99,60 @@ async function publishTweet(
   return { ok: res.ok, json };
 }
 
+/* ----------------------------------------
+   MAIN ENTRY
+---------------------------------------- */
+
 export async function publishScheduledPost(
   scheduledPost: ScheduledPostWithAccount
 ) {
   const { id, content, mediaUrls, twitterAccount } = scheduledPost;
-  let accessToken = twitterAccount.accessToken;
 
-  // Upload media if any
+  console.log(`[${id}] Starting scheduled publish`);
+
+  // ✅ ALWAYS get valid token FIRST
+  const accessToken = await getValidAccessToken(twitterAccount);
+
+  /* ---------- Upload media ---------- */
   const mediaIds: string[] = [];
-  for (const m of mediaUrls) {
-    mediaIds.push(await uploadMedia(accessToken, m));
-  }
 
-  // Attempt to publish
-  let { ok, json } = await publishTweet(accessToken, content, mediaIds);
+  if (mediaUrls?.length) {
+    console.log(`[${id}] Uploading ${mediaUrls.length} media files`);
 
-  // Refresh token if unauthorized
-  if (!ok && json?.title === "Unauthorized") {
-    console.log("Token expired, refreshing...");
-    
-    if (!twitterAccount.refreshToken) {
-      throw new Error("No refresh token available");
+    for (const media of mediaUrls) {
+      const mediaId = await uploadMedia(accessToken, media);
+      mediaIds.push(mediaId);
     }
-
-    const newTokens = await refreshTwitterToken(twitterAccount.refreshToken);
-
-    await db.twitterAccount.update({
-      where: { id: twitterAccount.id },
-      data: {
-        accessToken: newTokens.access_token,
-        refreshToken: newTokens.refresh_token ?? twitterAccount.refreshToken,
-        expiresAt: new Date(Date.now() + newTokens.expires_in * 1000),
-      },
-    });
-
-    accessToken = newTokens.access_token;
-    const retry = await publishTweet(accessToken, content, mediaIds);
-    ok = retry.ok;
-    json = retry.json;
   }
+
+  /* ---------- Publish tweet ---------- */
+  console.log(`[${id}] Publishing tweet`);
+
+  const { ok, json } = await publishTweet(accessToken, content, mediaIds);
 
   if (!ok) {
-    console.error("Tweet publish failed →", json);
+    console.error(`[${id}] Tweet publish failed`, json);
+
     await db.scheduledPost.update({
       where: { id },
       data: { status: "FAILED" },
     });
-    throw new Error(`Failed to publish tweet: ${JSON.stringify(json)}`);
+
+    throw new Error(`Tweet publish failed: ${JSON.stringify(json)}`);
   }
 
   const tweetId = json?.data?.id;
+
+  /* ---------- Mark as published ---------- */
   await db.scheduledPost.update({
     where: { id },
-    data: { 
-      status: "PUBLISHED", 
+    data: {
+      status: "PUBLISHED",
       publishedTweetId: tweetId,
-      // Remove publishedAt if it doesn't exist in your schema
     },
   });
+
+  console.log(`[${id}] Published successfully → Tweet ID: ${tweetId}`);
 
   return { tweetId };
 }

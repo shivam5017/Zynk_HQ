@@ -34,7 +34,7 @@ export default async function AppSidebarServer(props: any) {
         items: [
           { title: "Create Post", icon: "terminal", url: "/create-post" },
           { title: "Drafts", url: "/draft" },
-          { title: "Analytics", url: "#" },
+          { title: "Scheduled", url: "/scheduled" },
         ],
       },
     ],

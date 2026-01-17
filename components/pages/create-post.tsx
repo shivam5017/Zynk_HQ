@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import SocialAccountsSkeleton from "../ui/social-accounts-skeleton";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,13 +13,6 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
 import { DateTimePicker } from "@/components/ui/date-time-picker";
-import {
-  Select,
-  SelectTrigger,
-  SelectValue,
-  SelectContent,
-  SelectItem,
-} from "@/components/ui/select";
 
 const MAX_CHAR_LIMIT = 280;
 
@@ -42,41 +35,29 @@ export default function CreatePostClient({ accounts }: Props) {
   const [scheduleDate, setScheduleDate] = useState<Date | null>(null);
   const [media, setMedia] = useState<File | null>(null);
 
-  const [timezone, setTimezone] = useState("local");
-
   const [isPublishing, setIsPublishing] = useState(false);
   const [isScheduling, setIsScheduling] = useState(false);
   const [isSavingDraft, setIsSavingDraft] = useState(false);
+
+  // ✅ FIX: capture device local date & time on client
+  useEffect(() => {
+    const now = new Date();
+    now.setSeconds(0, 0); // clean seconds
+    setScheduleDate(now);
+  }, []);
 
   const isOverLimit = caption.length > MAX_CHAR_LIMIT;
   const isFormEmpty = !caption.trim() && !media && !scheduleDate;
 
   if (!twitterAccounts) return <SocialAccountsSkeleton />;
 
-  // ----------------------------
-  // Timezone conversions
-  // ----------------------------
-  const scheduledISO = useMemo(() => {
-    if (!scheduleDate) return "";
-
-    const date = new Date(scheduleDate);
-
-    switch (timezone) {
-      case "utc":
-        return date.toISOString();
-      case "ist": {
-        // Convert local date → UTC → add IST offset
-        const utcMs = date.getTime() - date.getTimezoneOffset() * 60000;
-        const istMs = utcMs - 5.5 * 60 * 60 * 1000; // UTC-5:30 to get UTC for QStash
-        return new Date(istMs).toISOString();
-      }
-      default:
-        // Local → convert to UTC
-        return new Date(
-          date.getTime() - date.getTimezoneOffset() * 60000,
-        ).toISOString();
-    }
-  }, [scheduleDate, timezone]);
+  // Check if scheduled time is at least 1 minute in the future
+  const isScheduleValid = useMemo(() => {
+    if (!scheduleDate) return false;
+    const now = new Date();
+    const oneMinuteFromNow = new Date(now.getTime() + 60000);
+    return scheduleDate > oneMinuteFromNow;
+  }, [scheduleDate]);
 
   // ----------------------------
   // Handlers
@@ -109,13 +90,23 @@ export default function CreatePostClient({ accounts }: Props) {
 
   const handleSchedule = async () => {
     if (!caption.trim() || !scheduleDate || isOverLimit) return;
+
+    if (!isScheduleValid) {
+      toast.error("Schedule time must be at least 1 minute in the future");
+      return;
+    }
+
     setIsScheduling(true);
 
     try {
       const res = await fetch("/api/posts/schedule", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ caption, scheduledTime: scheduledISO }),
+        body: JSON.stringify({
+          caption,
+          scheduledTime: scheduleDate.toISOString(),
+          media: [],
+        }),
       });
 
       if (!res.ok) {
@@ -126,6 +117,9 @@ export default function CreatePostClient({ accounts }: Props) {
 
       toast.success("Post scheduled ⏰");
       reset();
+    } catch (error) {
+      console.error("Schedule error:", error);
+      toast.error("Something went wrong");
     } finally {
       setIsScheduling(false);
     }
@@ -156,12 +150,12 @@ export default function CreatePostClient({ accounts }: Props) {
     router.refresh();
   };
 
-  // ---------------------------------------------------
-  // UI
-  // ---------------------------------------------------
+  // ----------------------------
+  // UI (UNCHANGED)
+  // ----------------------------
 
   return (
-    <div className=" p-2 space-y-6">
+    <div className="p-2 space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">Create New Post</h1>
         <p className="text-sm text-muted-foreground">
@@ -181,7 +175,7 @@ export default function CreatePostClient({ accounts }: Props) {
               <Textarea
                 value={caption}
                 onChange={(e) => setCaption(e.target.value)}
-                placeholder="What’s happening?!"
+                placeholder="What's happening?!"
                 className="min-h-36 resize-none text-base"
               />
 
@@ -266,27 +260,13 @@ export default function CreatePostClient({ accounts }: Props) {
 
             <CardContent>
               <div className="flex flex-col gap-4 w-full">
-                {/* FIXED HEIGHT WRAPPER → prevents UI movement */}
-                <div className="flex flex-col gap-3 w-full">
-                  <DateTimePicker
-                    value={scheduleDate}
-                    onChange={(d) => setScheduleDate(d)}
-                    className="w-full"
-                  />
+                <DateTimePicker
+                  value={scheduleDate}
+                  onChange={(d) => setScheduleDate(d)}
+                  className="w-full"
+                />
 
-                  <Select value={timezone} onValueChange={setTimezone}>
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder="Select Timezone" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="local">Local Time</SelectItem>
-                      <SelectItem value="utc">UTC</SelectItem>
-                      <SelectItem value="ist">IST (India)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* CLEAR BUTTON (always takes space → no shifting) */}
+                {/* CLEAR BUTTON */}
                 <div className="min-h-[38px]">
                   {scheduleDate ? (
                     <Button
@@ -302,14 +282,20 @@ export default function CreatePostClient({ accounts }: Props) {
                   )}
                 </div>
 
-                {/* FIXED HEIGHT DISPLAY */}
+                {/* SCHEDULE INFO */}
                 <div className="min-h-[16px]">
                   {scheduleDate && (
-                    <p className="text-xs text-muted-foreground">
-                      Scheduled for:{" "}
-                      <strong>{scheduleDate.toLocaleString()}</strong> (
-                      {timezone.toUpperCase()})
-                    </p>
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">
+                        Scheduled for:{" "}
+                        <strong>{scheduleDate.toLocaleString()}</strong>
+                      </p>
+                      {!isScheduleValid && (
+                        <p className="text-xs text-destructive">
+                          ⚠️ Must be at least 1 minute in the future
+                        </p>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>
@@ -337,7 +323,7 @@ export default function CreatePostClient({ accounts }: Props) {
 
         <Button
           variant="outline"
-          disabled={!scheduleDate || isScheduling || isOverLimit}
+          disabled={!scheduleDate || !isScheduleValid || isScheduling || isOverLimit}
           onClick={handleSchedule}
           className="relative min-w-28"
         >
