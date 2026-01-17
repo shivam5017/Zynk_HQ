@@ -24,3 +24,25 @@ export async function getDraftPosts() {
     },
   });
 }
+export async function getScheduledPosts() {
+  const session = await authSession();
+  if (!session) return [];
+
+  return db.scheduledPost.findMany({
+    where: {
+      userId: session.user.id,
+      status: "SCHEDULED",
+    },
+    orderBy: { updatedAt: "desc" },
+    include: {
+      twitterAccount: {
+        select: {
+          username: true,
+          name: true,
+          profileImageUrl: true,
+        },
+      },
+    },
+  });
+}
+

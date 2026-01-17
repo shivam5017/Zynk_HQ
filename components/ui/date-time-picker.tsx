@@ -12,8 +12,8 @@ import { Input } from "@/components/ui/input";
 interface DateTimePickerProps {
   value: Date | null;
   onChange: (date: Date | null) => void;
-  className?: string;               // 👈 NEW
-  popoverClassName?: string;        // 👈 NEW optional
+  className?: string;
+  popoverClassName?: string;
 }
 
 export function DateTimePicker({
@@ -23,32 +23,95 @@ export function DateTimePicker({
   popoverClassName,
 }: DateTimePickerProps) {
   const [open, setOpen] = React.useState(false);
-  const [time, setTime] = React.useState(value ? format(value, "HH:mm") : "");
+  
+  // Initialize time from value or use current time
+  const [time, setTime] = React.useState(() => {
+    if (value) {
+      const hours = value.getHours().toString().padStart(2, '0');
+      const minutes = value.getMinutes().toString().padStart(2, '0');
+      return `${hours}:${minutes}`;
+    }
+    const now = new Date();
+    const hours = now.getHours().toString().padStart(2, '0');
+    const minutes = now.getMinutes().toString().padStart(2, '0');
+    return `${hours}:${minutes}`;
+  });
+
+  // Update time when value changes externally
+  React.useEffect(() => {
+    if (value) {
+      const hours = value.getHours().toString().padStart(2, '0');
+      const minutes = value.getMinutes().toString().padStart(2, '0');
+      setTime(`${hours}:${minutes}`);
+    }
+  }, [value]);
 
   const handleDaySelect = (day: Date | undefined) => {
     if (!day) return;
 
+    // Parse the current time
     const [hours, minutes] = time.split(":").map(Number);
-    const updated = new Date(day);
+    
+    // Create a new date with the selected day and current time
+    // Important: Use the day's year, month, date but set our time
+    const updated = new Date(
+      day.getFullYear(),
+      day.getMonth(),
+      day.getDate(),
+      hours || 0,
+      minutes || 0,
+      0,
+      0
+    );
 
-    if (!isNaN(hours)) updated.setHours(hours);
-    if (!isNaN(minutes)) updated.setMinutes(minutes);
+    console.log("Day selected:", {
+      selectedDay: day.toISOString(),
+      time: time,
+      combinedDateTime: updated.toISOString(),
+      localString: updated.toLocaleString(),
+    });
 
     onChange(updated);
   };
 
   const handleTimeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setTime(e.target.value);
+    const newTime = e.target.value;
+    setTime(newTime);
 
     if (!value) return;
 
-    const [hours, minutes] = e.target.value.split(":").map(Number);
-    const updated = new Date(value);
+    const [hours, minutes] = newTime.split(":").map(Number);
+    
+    // Create new date preserving the original date but updating time
+    const updated = new Date(
+      value.getFullYear(),
+      value.getMonth(),
+      value.getDate(),
+      hours || 0,
+      minutes || 0,
+      0,
+      0
+    );
 
-    updated.setHours(hours || 0);
-    updated.setMinutes(minutes || 0);
+    console.log("Time changed:", {
+      newTime,
+      originalDate: value.toISOString(),
+      updatedDate: updated.toISOString(),
+      localString: updated.toLocaleString(),
+    });
 
     onChange(updated);
+  };
+
+  // Helper to check if a date is before today
+  const isBeforeToday = (date: Date) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const checkDate = new Date(date);
+    checkDate.setHours(0, 0, 0, 0);
+    
+    return checkDate < today;
   };
 
   return (
@@ -63,7 +126,13 @@ export function DateTimePicker({
             )}
           >
             <CalendarIcon className="mr-2 h-4 w-4" />
-            {value ? format(value, "PPP p") : "Pick a date & time"}
+            {value ? (
+              <>
+                {format(value, "PPP")} at {format(value, "HH:mm")}
+              </>
+            ) : (
+              "Pick a date & time"
+            )}
           </Button>
         </PopoverTrigger>
 
@@ -75,22 +144,31 @@ export function DateTimePicker({
             mode="single"
             selected={value ?? undefined}
             onSelect={handleDaySelect}
-            disabled={(date) => date < new Date()}
+            disabled={isBeforeToday}
             initialFocus
           />
 
-          <div>
-            <label className="text-sm text-muted-foreground">Time</label>
-            <Input type="time" value={time} onChange={handleTimeChange} />
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Time</label>
+            <Input 
+              type="time" 
+              value={time} 
+              onChange={handleTimeChange}
+              className="w-full"
+            />
           </div>
         </PopoverContent>
       </Popover>
 
       {value && (
-        <p className="text-xs text-muted-foreground">
-          Your local timezone:{" "}
-          <strong>{Intl.DateTimeFormat().resolvedOptions().timeZone}</strong>
-        </p>
+        <div className="space-y-1">
+          <p className="text-xs text-muted-foreground">
+            Selected: <strong>{value.toLocaleString()}</strong>
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Timezone: <strong>{Intl.DateTimeFormat().resolvedOptions().timeZone}</strong>
+          </p>
+        </div>
       )}
     </div>
   );
