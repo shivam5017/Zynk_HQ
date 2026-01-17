@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "cron": "ts-node cron/schedule.ts"
+    "test:cron": "tsx scripts/test-cron.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
