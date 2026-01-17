@@ -1,0 +1,219 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id               String      @id
+  name             String
+  email            String
+  emailVerified    Boolean     @default(false)
+  image            String?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @default(now()) @updatedAt
+  sessions         Session[]
+  accounts         Account[]
+  twoFactorEnabled Boolean     @default(false)
+  twoFactor        TwoFactor[]
+  twitterAccounts  TwitterAccount[]
+  scheduledPosts   ScheduledPost[]
+  subscription     Subscription?
+  role             String?
+  banned           Boolean?
+  banReason        String?
+  banExpires       DateTime?
+  oauthStates      TwitterOAuthState[]
+
+  @@unique([email])
+  @@map("user")
+}
+
+model Session {
+  id             String   @id
+  expiresAt      DateTime
+  token          String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  ipAddress      String?
+  userAgent      String?
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  impersonatedBy String?
+
+  @@unique([token])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @default(now()) @updatedAt
+
+  @@map("verification")
+}
+
+model TwoFactor {
+  id          String @id
+  userId      String
+  secret      String
+  backupCodes String
+  user        User   @relation(references: [id], fields: [userId], onDelete: Cascade)
+
+  @@map("twoFactor")
+}
+
+
+model TwitterAccount {
+  id              String   @id @default(cuid())
+  userId          String
+  twitterUserId   String   @unique
+  username        String
+  name            String?
+  profileImageUrl String?
+  accessToken     String   @db.Text
+  refreshToken    String?  @db.Text
+  expiresAt       DateTime?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scheduledPosts  ScheduledPost[]
+
+  @@map("twitter_accounts")
+}
+
+enum PostStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHING
+  PUBLISHED
+  FAILED
+  CANCELLED
+}
+
+model ScheduledPost {
+  id                String      @id @default(cuid())
+  twitterAccountId  String
+  userId            String
+  content           String      @db.Text
+  mediaUrls         String[]
+  scheduledTime     DateTime
+  status            PostStatus  @default(DRAFT)
+  publishedTweetId  String?
+  threadParentId    String?
+  settings          Json?
+  errorMessage      String?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  twitterAccount    TwitterAccount @relation(fields: [twitterAccountId], references: [id], onDelete: Cascade)
+  user              User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  threadParent      ScheduledPost? @relation("ThreadRelation", fields: [threadParentId], references: [id])
+  threadReplies     ScheduledPost[] @relation("ThreadRelation")
+  analytics         PostAnalytics?
+
+  @@index([userId])
+  @@index([twitterAccountId])
+  @@index([scheduledTime])
+  @@index([status])
+  @@map("scheduled_posts")
+}
+
+model PostAnalytics {
+  id               String   @id @default(cuid())
+  scheduledPostId  String   @unique
+  impressions      Int      @default(0)
+  likes            Int      @default(0)
+  retweets         Int      @default(0)
+  replies          Int      @default(0)
+  bookmarks        Int      @default(0)
+  quotes           Int      @default(0)
+  engagementRate   Float    @default(0)
+  collectedAt      DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  scheduledPost    ScheduledPost @relation(fields: [scheduledPostId], references: [id], onDelete: Cascade)
+
+  @@map("post_analytics")
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELLED
+  PAST_DUE
+  INCOMPLETE
+}
+
+enum PlanTier {
+  FREE
+  GROWTH
+  PREMIUM
+}
+
+model Subscription {
+  id                    String             @id @default(cuid())
+  userId                String             @unique
+  stripeCustomerId      String             @unique
+  stripeSubscriptionId  String?            @unique
+  stripePriceId         String?
+  planTier              PlanTier           @default(FREE)
+  status                SubscriptionStatus @default(ACTIVE)
+  postLimit             Int              
+  postsUsed             Int                @default(0)
+  currentPeriodStart    DateTime?
+  currentPeriodEnd      DateTime?
+  cancelAtPeriodEnd     Boolean            @default(false)
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+
+  user                  User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("subscriptions")
+}
+
+
+
+model TwitterOAuthState {
+  id        String   @id @default(cuid())
+  state     String   @unique      // the random state sent to Twitter
+  userId    String
+  verifier  String               // PKCE verifier
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("twitter_oauth_state")
+}
